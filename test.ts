@@ -1,4 +1,9 @@
-import { assert, assertStringIncludes, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { join } from "@std/path";
 import type { SiteConfig } from "steno";
 import docsPlugin from "./mod.ts";
@@ -185,6 +190,93 @@ Deno.test({
     } finally {
       Deno.removeSync(sourceDir, { recursive: true });
       Deno.removeSync(contentDir, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: "docs: only reads top-level .md files from sourceDir, ignoring others",
+  fn: async () => {
+    const { sourceDir, contentDir } = makeDirs();
+    try {
+      Deno.mkdirSync(join(sourceDir, "nested"), { recursive: true });
+      Deno.writeTextFileSync(join(sourceDir, "nested", "deep.md"), "# Deep\n");
+      Deno.writeTextFileSync(join(sourceDir, "notes.txt"), "not markdown");
+      Deno.writeTextFileSync(join(sourceDir, "top.md"), "# Top\n");
+
+      const plugin = docsPlugin({ sourceDir });
+      await plugin.beforeBuild!({ contentDir } as unknown as SiteConfig);
+
+      const target = join(contentDir, "docs");
+      const entries: string[] = [];
+      for await (const entry of Deno.readDir(target)) {
+        entries.push(entry.name);
+      }
+
+      assertEquals(entries, ["top.md"]);
+    } finally {
+      Deno.removeSync(sourceDir, { recursive: true });
+      Deno.removeSync(contentDir, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: "docs: respects targetDir, layout, and descriptionTemplate options",
+  fn: async () => {
+    const { sourceDir, contentDir } = makeDirs();
+    try {
+      Deno.writeTextFileSync(
+        join(sourceDir, "install.md"),
+        "# Install\n\nRun the installer.\n",
+      );
+
+      const plugin = docsPlugin({
+        sourceDir,
+        targetDir: "guides",
+        layout: "guide-layout",
+        descriptionTemplate: "Learn about {title} here.",
+      });
+      await plugin.beforeBuild!({ contentDir } as unknown as SiteConfig);
+
+      const written = Deno.readTextFileSync(
+        join(contentDir, "guides", "install.md"),
+      );
+
+      assertStringIncludes(written, 'layout: "guide-layout"');
+      assertStringIncludes(
+        written,
+        'description: "Learn about Install here."',
+      );
+      assert(!(await exists(join(contentDir, "docs", "install.md"))));
+    } finally {
+      Deno.removeSync(sourceDir, { recursive: true });
+      Deno.removeSync(contentDir, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: 'docs: falls back to "content" when config.contentDir is not set',
+  fn: async () => {
+    const { sourceDir } = makeDirs();
+    const originalCwd = Deno.cwd();
+    const cwdRoot = Deno.makeTempDirSync();
+    try {
+      Deno.chdir(cwdRoot);
+      Deno.writeTextFileSync(join(sourceDir, "page.md"), "# Page\n");
+
+      const plugin = docsPlugin({ sourceDir });
+      await plugin.beforeBuild!({} as unknown as SiteConfig);
+
+      const written = Deno.readTextFileSync(
+        join(cwdRoot, "content", "docs", "page.md"),
+      );
+      assertStringIncludes(written, 'title: "Page"');
+    } finally {
+      Deno.chdir(originalCwd);
+      Deno.removeSync(sourceDir, { recursive: true });
+      Deno.removeSync(cwdRoot, { recursive: true });
     }
   },
 });
